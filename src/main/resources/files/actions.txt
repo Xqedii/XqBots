@@ -1,0 +1,4 @@
+# Anarchia.gg
+
+[wait 5000]
+[login]
