@@ -1,4 +1,12 @@
 # Anarchia.gg
 
-[wait 5000]
+[wait 500]
 [login]
+[wait 2000]
+[goto 0 0 0]
+[wait 3000]
+[slot 4]
+[wait 300]
+[right]
+[wait 300]
+[gui 2 0]

