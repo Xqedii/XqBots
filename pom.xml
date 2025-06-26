@@ -32,7 +32,7 @@
         <dependency>
             <groupId>com.github.GeyserMC</groupId>
             <artifactId>MCProtocolLib</artifactId>
-            <version>Xqedii</version>
+            <version>1.18.2-1</version>
         </dependency>
         <dependency>
             <groupId>commons-cli</groupId>

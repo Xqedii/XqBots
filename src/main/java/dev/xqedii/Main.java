@@ -14,7 +14,6 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Scanner;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -43,6 +42,7 @@ public class Main {
     private static ProxyInfo.Type proxyType;
 
     private static Timer timer = new Timer();
+    private static ListenerManager listenerManager = null;
 
     private static volatile boolean isAsciiSequenceRunning = false;
     private static final List<String> DEFAULT_ASCII_MESSAGES = Arrays.asList(
@@ -85,6 +85,8 @@ public class Main {
         options.addOption("a", "actions", true, "Path to actions script file");
         options.addOption("g", "gravity", false, "Try to simulate gravity by falling down");
 
+        options.addOption(null, "listeners", true, "Path to listeners folder");
+
         CommandLineParser parser = new DefaultParser();
         CommandLine cmd = null;
 
@@ -94,6 +96,12 @@ public class Main {
             System.out.println(e.getMessage());
             new HelpFormatter().printHelp("bot-utility", options);
             System.exit(1);
+        }
+
+        if (cmd.hasOption("listeners")) {
+            String listenersPath = cmd.getOptionValue("listeners");
+            Log.info("Inicjalizowanie listenerów z folderu: " + listenersPath);
+            listenerManager = new ListenerManager(listenersPath);
         }
 
         if (cmd.hasOption("g")) {
@@ -286,7 +294,8 @@ public class Main {
                             nickGen.nextNick(),
                             inetAddr,
                             proxyInfo,
-                            actionsFilePath
+                            actionsFilePath,
+                            listenerManager
                     );
                     bot.start();
 
@@ -313,8 +322,6 @@ public class Main {
         }).start();
 
         Scanner scanner = new Scanner(System.in);
-
-        Log.info("Console ready. Type a message to send it with all bots, or use !<command>.");
 
         while (scanner.hasNextLine()) {
             String line = scanner.nextLine();
@@ -390,16 +397,16 @@ public class Main {
             case "sector": {
                 String[] sectorParts = commandLine.trim().split(" ");
                 if (sectorParts.length < 2) {
-                    Log.warn("Usage: !sector <number | auto<N> | distribute <N>>");
-                    Log.warn("Examples: !sector 5 | !sector auto4 | !sector distribute 8");
+                    Log.warn("Usage: !sector <number | distribute <N>>");
+                    Log.warn("Examples: !sector 5 | !sector distribute 8");
                     break;
                 }
 
                 String commandType = sectorParts[1].toLowerCase();
 
-                if (commandType.equals("distribute")) {
+                if (commandType.equals("auto")) {
                     if (sectorParts.length < 3) {
-                        Log.warn("Usage: !sector distribute <number_of_sectors>");
+                        Log.warn("Usage: !sector auto <number_of_sectors>");
                         break;
                     }
                     try {
@@ -428,28 +435,6 @@ public class Main {
                     } catch (NumberFormatException e) {
                         Log.error("Invalid number of sectors: '" + sectorParts[2] + "'");
                     }
-
-                } else if (commandType.startsWith("auto")) {
-                    try {
-                        String numberPart = commandType.substring(4);
-                        int groupSize = Integer.parseInt(numberPart);
-
-                        if (groupSize <= 0) {
-                            Log.error("Group size for auto-sector must be a positive number.");
-                            break;
-                        }
-
-                        Log.info("Distributing bots into sectors in groups of " + groupSize + "...");
-
-                        for (Bot bot : bots) {
-                            int targetSector = ((bot.getBotId() - 1) / groupSize) + 1;
-                            Log.info("Bot #" + bot.getBotId() + " (" + bot.getNickname() + ") -> Sector " + targetSector);
-                            bot.changeSector(targetSector, "sector", 0);
-                        }
-                    } catch (NumberFormatException | StringIndexOutOfBoundsException e) {
-                        Log.error("Invalid auto-sector format. Use 'auto<number>', e.g., '!sector auto3'.");
-                    }
-
                 } else {
                     try {
                         int sectorNumber = Integer.parseInt(commandType);

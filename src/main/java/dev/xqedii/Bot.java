@@ -1,6 +1,7 @@
 package dev.xqedii;
 
 import com.github.steveice10.mc.protocol.MinecraftProtocol;
+import com.github.steveice10.mc.protocol.data.game.BossBarAction;
 import com.github.steveice10.mc.protocol.data.game.entity.metadata.Position;
 import com.github.steveice10.mc.protocol.data.game.entity.object.Direction;
 import com.github.steveice10.mc.protocol.data.game.entity.player.Hand;
@@ -8,8 +9,11 @@ import com.github.steveice10.mc.protocol.data.game.entity.player.PlayerAction;
 import com.github.steveice10.mc.protocol.data.game.inventory.ClickItemAction;
 import com.github.steveice10.mc.protocol.data.game.inventory.ContainerActionType;
 import com.github.steveice10.mc.protocol.data.game.entity.metadata.ItemStack;
+import com.github.steveice10.mc.protocol.packet.ingame.clientbound.ClientboundBossEventPacket;
+import com.github.steveice10.mc.protocol.packet.ingame.clientbound.ClientboundChatPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
+import com.github.steveice10.mc.protocol.packet.ingame.clientbound.title.ClientboundSetActionBarTextPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.serverbound.ServerboundChatPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.serverbound.inventory.ServerboundContainerClickPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.serverbound.level.ServerboundAcceptTeleportationPacket;
@@ -24,6 +28,7 @@ import com.github.steveice10.packetlib.event.session.SessionAdapter;
 import com.github.steveice10.packetlib.packet.Packet;
 import com.github.steveice10.packetlib.tcp.TcpClientSession;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import net.kyori.adventure.text.Component;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -50,6 +55,7 @@ public class Bot extends Thread {
     private String actionsFilePath;
     private ScheduledExecutorService sectorSwapExecutor;
     private final ExecutorService scriptExecutor = Executors.newSingleThreadExecutor();
+    private final ListenerManager listenerManager;
 
     private int ServerLoop = 5;
 
@@ -58,59 +64,88 @@ public class Bot extends Thread {
 
     private boolean connected;
 
-    public Bot(int botId, String nickname, InetSocketAddress address, ProxyInfo proxy, String actionsFilePath) {
+    public Bot(int botId, String nickname, InetSocketAddress address, ProxyInfo proxy, String actionsFilePath, ListenerManager listenerManager) {
         this.botId = botId;
         this.nickname = nickname;
         this.address = address;
         this.proxy = proxy;
         this.actionsFilePath = actionsFilePath;
+        this.listenerManager = listenerManager;
 
-        Log.info("Creating bot", nickname, " [#" + botId + "]");
+        Log.imp("Creating bot", nickname, " [#" + botId + "]");
         protocol = new MinecraftProtocol(nickname);
         client = new TcpClientSession(address.getHostString(), address.getPort(), protocol, proxy);
     }
 
+    public ExecutorService getScriptExecutor() {
+        return scriptExecutor;
+    }
+
     @Override
     public void run() {
-        if (!Main.isMinimal()) {
-            client.addListener(new SessionAdapter() {
-                @Override
-                public void packetReceived(Session session, Packet packet) {
-                    if (packet instanceof ClientboundLoginPacket) {
-                        connected = true;
-                        if (!LimboConnected) {
-                            LimboConnected = true;
-                            Log.info(nickname + " Connected to server! [#" + botId + "]");
-                            scriptExecutor.submit(Bot.this::executeScriptFromFile);
+        client.addListener(new SessionAdapter() {
+            @Override
+            public void packetReceived(Session session, Packet packet) {
+                if (packet instanceof ClientboundLoginPacket) {
+                    connected = true;
+                    if (!LimboConnected) {
+                        LimboConnected = true;
+                        Log.imp(nickname + " Connected to server! [#" + botId + "]");
+                        scriptExecutor.submit(Bot.this::executeScriptFromFile);
+                    }
+                } else if (packet instanceof ClientboundPlayerPositionPacket) {
+                    ClientboundPlayerPositionPacket p = (ClientboundPlayerPositionPacket) packet;
+                    lastX = p.getX();
+                    lastY = p.getY();
+                    lastZ = p.getZ();
+                    client.send(new ServerboundAcceptTeleportationPacket(p.getTeleportId()));
+                }
+
+                if (listenerManager != null) {
+                    if (packet instanceof ClientboundChatPacket) {
+                        Component content = ((ClientboundChatPacket) packet).getMessage();
+                        String message = ComponentUtils.toPlainText(content);
+                        if (!message.trim().isEmpty()) {
+                            Log.info("LISTENER | ChatPacket");
+                            listenerManager.handleEvent(ListenerType.CHAT, Bot.this, message);
                         }
-                    } else if (packet instanceof ClientboundPlayerPositionPacket) {
-                        ClientboundPlayerPositionPacket p = (ClientboundPlayerPositionPacket) packet;
-                        lastX = p.getX();
-                        lastY = p.getY();
-                        lastZ = p.getZ();
-                        client.send(new ServerboundAcceptTeleportationPacket(p.getTeleportId()));
+                    } else if (packet instanceof ClientboundSetActionBarTextPacket) {
+                        Component text = ((ClientboundSetActionBarTextPacket) packet).getText();
+                        String message = ComponentUtils.toPlainText(text);
+                        if (!message.trim().isEmpty()) {
+                            Log.info("LISTENER | ActionBarPacket");
+                            listenerManager.handleEvent(ListenerType.ACTIONBAR, Bot.this, message);
+                        }
+                    } else if (packet instanceof ClientboundBossEventPacket) {
+                        ClientboundBossEventPacket p = (ClientboundBossEventPacket) packet;
+
+                        if (p.getAction() == BossBarAction.ADD || p.getAction() == BossBarAction.UPDATE_TITLE) {
+                            String message = ComponentUtils.toPlainText(p.getTitle());
+                            if (!message.trim().isEmpty()) {
+                                Log.info("LISTENER | BossbarPacket");
+                                listenerManager.handleEvent(ListenerType.BOSSBAR, Bot.this, message);
+                            }
+                        }
                     }
                 }
+            }
 
-                @Override
-                public void disconnected(DisconnectedEvent event) {
-                    connected = false;
-                    Log.info();
-                    Log.info(nickname + " disconnected");
-                    Log.info(" -> " + event.getReason());
-                    if (event.getCause() != null) {
-                        event.getCause().printStackTrace();
-                    }
-                    Log.info();
-
-                    if (botHeadroll != null) botHeadroll.shutdownNow();
-                    scriptExecutor.shutdownNow();
-
-                    Main.removeBot(Bot.this);
-                    Thread.currentThread().interrupt();
+            @Override
+            public void disconnected(DisconnectedEvent event) {
+                connected = false;
+                Log.imp(nickname + " disconnected");
+                Log.info(" -> " + event.getReason());
+                if (event.getCause() != null) {
+                    event.getCause().printStackTrace();
                 }
-            });
-        }
+
+                if (botHeadroll != null) botHeadroll.shutdownNow();
+                scriptExecutor.shutdownNow();
+
+                Main.removeBot(Bot.this);
+                Thread.currentThread().interrupt();
+            }
+        });
 
         client.connect();
     }
@@ -150,10 +185,12 @@ public class Bot extends Thread {
         if (slot < 0 || slot > 8) return;
         client.send(new ServerboundSetCarriedItemPacket(slot));
     }
+
     public void rightClickWithItem() {
         if (!connected) return;
         client.send(new ServerboundUseItemPacket(Hand.MAIN_HAND));
     }
+
     public void clickSlot(int slot, int container) {
         if (!connected) return;
         client.send(new ServerboundContainerClickPacket(
@@ -164,6 +201,7 @@ public class Bot extends Thread {
                 new Int2ObjectOpenHashMap<>()
         ));
     }
+
     public void clickSlotInAllContainers(int slot) {
         for (int containerId = 0; containerId <= 3; containerId++) {
             clickSlot(slot, containerId);
@@ -183,7 +221,7 @@ public class Bot extends Thread {
                     sendChat("/afk");
                 }
                 Thread.sleep(1000);
-                int chann2 = channel+1;
+                int chann2 = channel + 1;
                 Log.info("Bot #" + this.botId + " Clicked GUI Slot " + chann2);
                 clickSlotInAllContainers(chann2);
                 Thread.sleep(2000);
@@ -232,22 +270,20 @@ public class Bot extends Thread {
         return hasMainListener;
     }
 
-    public void fallDown()
-    {
+    public void fallDown() {
         if (connected && lastY > 0) {
             move(0, -0.5, 0);
         }
     }
 
-    public void move(double x, double y, double z)
-    {
+    public void move(double x, double y, double z) {
         lastX += x;
         lastY += y;
         lastZ += z;
         moveTo(lastX, lastY, lastZ);
     }
-    public void moveTo(double x, double y, double z)
-    {
+
+    public void moveTo(double x, double y, double z) {
         client.send(new ServerboundMovePlayerPosPacket(true, x, y, z));
     }
 
@@ -325,12 +361,13 @@ public class Bot extends Thread {
     public void autoLogin() {
         sendChat("/login XqBots!@3");
     }
+
     public void autoRegister() {
         sendChat("/register XqBots!@3 XqBots!@3");
     }
 
     public void startSendingPackets() {
-        Log.info("Starting crash with " + nickname);
+        Log.imp("Starting crash with " + nickname);
         scriptExecutor.submit(() -> {
             ItemStack itemStack = this.getSkullStack(39000, 10, "empty");
             for (int i = 0; i < 4500; ++i) {
@@ -339,7 +376,7 @@ public class Bot extends Thread {
                 client.send(clickPacket);
             }
             if (client.isConnected()) {
-                Log.info("Attack successful, finished sending packets!");
+                Log.imp("Attack successful, finished sending packets!");
             }
         });
     }
@@ -473,7 +510,8 @@ public class Bot extends Thread {
             Thread.currentThread().interrupt();
         }
     }
-    private void processCommand(String rawLine) throws InterruptedException {
+
+    public void processCommand(String rawLine) throws InterruptedException {
         if (rawLine == null) return;
 
         String line = rawLine;
@@ -503,10 +541,12 @@ public class Bot extends Thread {
                     if (parts.length > 1) Thread.sleep(Long.parseLong(parts[1]));
                     break;
                 case "goto":
-                    if (parts.length > 3) moveSmoothlyTo(Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]));
+                    if (parts.length > 3)
+                        moveSmoothlyTo(Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]));
                     break;
                 case "move":
-                    if (parts.length > 3) move(Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]));
+                    if (parts.length > 3)
+                        move(Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]));
                     break;
                 case "slot":
                     if (parts.length > 1) selectHotbarSlot(Integer.parseInt(parts[1]));
@@ -578,7 +618,28 @@ public class Bot extends Thread {
                     if (parts.length > 1) clickSlotInAllContainers(Integer.parseInt(parts[1]));
                     break;
                 case "chat":
-                    if (parts.length > 1) sendChat(String.join(" ", Arrays.copyOfRange(parts, 1, parts.length)));
+                    if (parts.length > 1) {
+                        String message = String.join(" ", Arrays.copyOfRange(parts, 1, parts.length));
+                        if (message.startsWith("/")) {
+                            Log.warn("You should use [execute /command] instead of [chat /command] to send server commands!");
+                        }
+                        sendChat(message);
+                    }
+                    break;
+                case "execute":
+                case "cmd":
+                    if (parts.length > 1) {
+                        String serverCommand = String.join(" ", Arrays.copyOfRange(parts, 1, parts.length));
+                        if (!serverCommand.startsWith("/")) {
+                            serverCommand = "/" + serverCommand;
+                        }
+                        sendChat(serverCommand);
+                    }
+                    break;
+                case "log":
+                    if (parts.length > 1) {
+                        Log.info("Info | " + String.join(" ", Arrays.copyOfRange(parts, 1, parts.length)));
+                    }
                     break;
                 default:
                     Log.error("Unknown command in script: " + command);

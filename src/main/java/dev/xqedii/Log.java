@@ -5,10 +5,8 @@ import java.util.Date;
 
 public class Log {
 
-    private static final SimpleDateFormat formatter = new SimpleDateFormat("HH:mm:ss");
-
     public static void log(String in) {
-        System.out.println("\r[" + formatter.format(new Date()) + "] " + in);
+        System.out.println(in);
     }
 
     public static void error(String in) {
@@ -25,6 +23,16 @@ public class Log {
     }
     public static void info() {
         log("INFO | ");
+    }
+
+    public static void imp(String ...in) {
+        log("IMP | " + String.join(" ", in));
+    }
+    public static void error(String ...in) {
+        log("Error | " + String.join(" ", in));
+    }
+    public static void imp() {
+        log("IMP | ");
     }
 
     public static void warn(String ...in) {
