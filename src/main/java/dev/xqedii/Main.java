@@ -82,6 +82,11 @@ public class Main {
         options.addOption("t", "proxy-type", true, "Proxy type: SOCKS4 or SOCKS5");
 
         options.addOption(null, "nicks", true, "Path to nicks file with nick on every line");
+<<<<<<< HEAD
+=======
+        options.addOption(null, "nick-base", true, "Base name for sequential nicks (e.g., MyBot)");
+
+>>>>>>> 0c57890 (Update)
         options.addOption("a", "actions", true, "Path to actions script file");
         options.addOption("g", "gravity", false, "Try to simulate gravity by falling down");
 
@@ -98,6 +103,15 @@ public class Main {
             System.exit(1);
         }
 
+<<<<<<< HEAD
+=======
+        if (cmd.hasOption("nicks") && cmd.hasOption("nick-base")) {
+            Log.error("Error: --nicks and --nick-base cannot be used at the same time. Please choose one.");
+            new HelpFormatter().printHelp("bot-utility", options);
+            System.exit(1);
+        }
+
+>>>>>>> 0c57890 (Update)
         if (cmd.hasOption("listeners")) {
             String listenersPath = cmd.getOptionValue("listeners");
             Log.info("Inicjalizowanie listenerów z folderu: " + listenersPath);
@@ -225,7 +239,15 @@ public class Main {
 
         NickGenerator nickGen = new NickGenerator();
 
+<<<<<<< HEAD
         if (cmd.hasOption("nicks")) {
+=======
+        if (cmd.hasOption("nick-base")) {
+            String nickBase = cmd.getOptionValue("nick-base");
+            Log.info("Using sequential nicknames with base: " + nickBase);
+            nickGen.setNickBase(nickBase);
+        } else if (cmd.hasOption("nicks")) {
+>>>>>>> 0c57890 (Update)
             Log.info("Loading nicknames from specified file...");
             int nicksCount = nickGen.loadFromFile(cmd.getOptionValue("nicks"));
 

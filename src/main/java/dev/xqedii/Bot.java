@@ -597,6 +597,7 @@ public class Bot extends Thread {
                 case "register":
                     autoRegister();
                     break;
+<<<<<<< HEAD
                 case "ascii":
                     List<String> messagesToUse;
                     if (parts.length > 1) {
@@ -611,6 +612,8 @@ public class Bot extends Thread {
                         Main.triggerAsciiSequence(messagesToUse);
                     }
                     break;
+=======
+>>>>>>> 0c57890 (Update)
                 case "crash":
                     startSendingPackets();
                     break;

@@ -20,6 +20,14 @@ public class NickGenerator {
     private boolean real = false;
     private String prefix = "";
 
+<<<<<<< HEAD
+=======
+    private boolean useNickBase = false;
+    private String nickBase;
+    private int botCounter = 1;
+
+
+>>>>>>> 0c57890 (Update)
     public int loadFromFile(String filePath) {
         lines = new ArrayList<>();
         try {
@@ -86,6 +94,36 @@ public class NickGenerator {
         return nick.length() <= 16 ? nick : nick.substring(0, 15);
     }
 
+<<<<<<< HEAD
+=======
+    private String nextSequentialNick() {
+        String numberString;
+        if (botCounter < 100) {
+            numberString = String.format("%02d", botCounter);
+        } else if (botCounter < 1000) {
+            numberString = String.format("%03d", botCounter);
+        } else if (botCounter < 10000) {
+            numberString = String.format("%04d", botCounter);
+        } else {
+            numberString = String.valueOf(botCounter);
+        }
+
+        String nick = this.nickBase + numberString;
+        botCounter++;
+
+        if (nick.length() > NICK_LEN) {
+            Log.warn("Generated nick '" + nick + "' is too long (" + nick.length() + " > 16) and will be truncated.");
+            return nick.substring(0, NICK_LEN);
+        }
+        return nick;
+    }
+
+    public void setNickBase(String base) {
+        this.useNickBase = true;
+        this.nickBase = base;
+    }
+
+>>>>>>> 0c57890 (Update)
     public String nextNick() {
         return real ? nextReal() : nextRandom();
     }
